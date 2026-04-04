@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tqhk"
+version = "0.1.0"
+description = "TurboQuant KV compression benchmark with refusal/KL evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.1",
+  "transformers>=4.45",
+  "accelerate>=0.30",
+  "bitsandbytes>=0.43",
+  "datasets>=2.20",
+  "scipy>=1.10",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
