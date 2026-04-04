@@ -115,16 +115,17 @@ class TurboQuantDynamicCache(DynamicCache):
 
         for comp_k, comp_v in zip(self._chunks_k[layer_idx], self._chunks_v[layer_idx]):
             deq_k, deq_v = compressor.decompress_kv(comp_k, comp_v)
-            parts_k.append(deq_k.to(key_states.dtype))
-            parts_v.append(deq_v.to(value_states.dtype))
+            parts_k.append(deq_k.to(key_states.dtype).contiguous())
+            parts_v.append(deq_v.to(value_states.dtype).contiguous())
 
         recent_k = torch.cat(self._recent_k[layer_idx], dim=2)
         recent_v = torch.cat(self._recent_v[layer_idx], dim=2)
-        parts_k.append(recent_k)
-        parts_v.append(recent_v)
+        parts_k.append(recent_k.contiguous())
+        parts_v.append(recent_v.contiguous())
 
-        full_k = torch.cat(parts_k, dim=2)
-        full_v = torch.cat(parts_v, dim=2)
+        # SDPA expects the last dimension to be contiguous.
+        full_k = torch.cat(parts_k, dim=2).contiguous()
+        full_v = torch.cat(parts_v, dim=2).contiguous()
 
         while len(self.layers) <= layer_idx:
             self.layers.append(DynamicLayer())
