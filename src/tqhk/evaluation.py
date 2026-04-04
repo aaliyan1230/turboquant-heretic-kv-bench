@@ -29,6 +29,12 @@ DEFAULT_REFUSAL_MARKERS = [
 ]
 
 
+def _stable_log_softmax(logits: torch.Tensor) -> torch.Tensor:
+    """Convert possibly non-finite logits into finite log-probabilities."""
+    safe_logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+    return F.log_softmax(safe_logits, dim=-1)
+
+
 @dataclass
 class EvalResult:
     refusal_rate: float
@@ -83,7 +89,7 @@ def get_first_token_logprobs(
             pad_token_id=tokenizer.pad_token_id,
         )
         logits = outputs.scores[0]
-        all_logprobs.append(F.log_softmax(logits, dim=-1).cpu())
+        all_logprobs.append(_stable_log_softmax(logits).cpu())
     return torch.cat(all_logprobs, dim=0)
 
 
@@ -153,9 +159,16 @@ def generate_responses(
 def compute_kl_to_baseline(
     current_logprobs: torch.Tensor, baseline_logprobs: torch.Tensor
 ) -> float:
-    return F.kl_div(
-        current_logprobs,
-        baseline_logprobs,
+    current = torch.nan_to_num(current_logprobs, nan=-1e4, posinf=1e4, neginf=-1e4)
+    baseline = torch.nan_to_num(baseline_logprobs, nan=-1e4, posinf=1e4, neginf=-1e4)
+
+    current = F.log_softmax(current, dim=-1)
+    baseline = F.log_softmax(baseline, dim=-1)
+
+    kl = F.kl_div(
+        current,
+        baseline,
         reduction="batchmean",
         log_target=True,
-    ).item()
+    )
+    return torch.nan_to_num(kl, nan=0.0, posinf=0.0, neginf=0.0).item()
