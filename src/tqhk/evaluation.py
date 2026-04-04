@@ -104,6 +104,40 @@ def get_first_token_logprobs(
 
 
 @torch.no_grad()
+def generate_target_token_ids(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    prompts: list[str],
+    batch_size: int,
+    device: str,
+    max_new_tokens: int,
+) -> list[list[int]]:
+    targets: list[list[int]] = []
+    for i in range(0, len(prompts), batch_size):
+        batch = prompts[i : i + batch_size]
+        inputs = tokenizer(
+            batch,
+            return_tensors="pt",
+            padding=True,
+            return_token_type_ids=False,
+        ).to(device)
+
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            use_cache=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+
+        input_len = inputs["input_ids"].shape[1]
+        for j in range(outputs.shape[0]):
+            token_ids = outputs[j, input_len:].tolist()
+            targets.append(token_ids)
+    return targets
+
+
+@torch.no_grad()
 def generate_responses(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
@@ -200,7 +234,7 @@ def compute_teacher_forced_nll(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     prompts: list[str],
-    target_texts: list[str],
+    target_token_ids: list[list[int]],
     device: str,
     cache_factory: Callable[[], TurboQuantDynamicCache] | None = None,
 ) -> float:
@@ -208,11 +242,7 @@ def compute_teacher_forced_nll(
     total_nll = 0.0
     total_tokens = 0
 
-    for prompt, target_text in zip(prompts, target_texts):
-        target_ids = tokenizer(
-            target_text,
-            add_special_tokens=False,
-        )["input_ids"]
+    for prompt, target_ids in zip(prompts, target_token_ids):
         if not target_ids:
             continue
 

@@ -15,6 +15,7 @@ from .evaluation import (
     compute_teacher_forced_nll,
     EvalResult,
     compute_kl_to_baseline,
+    generate_target_token_ids,
     generate_responses,
     get_first_token_logprobs,
     is_refusal,
@@ -121,20 +122,19 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
         cache_factory=None,
     )
 
-    baseline_targets, _, _ = generate_responses(
+    baseline_target_ids = generate_target_token_ids(
         model=model,
         tokenizer=tokenizer,
         prompts=harmless_prompts,
         batch_size=cfg.batch_size,
         device=cfg.device,
         max_new_tokens=cfg.nll_target_new_tokens,
-        cache_factory=None,
     )
     baseline_nll = compute_teacher_forced_nll(
         model=model,
         tokenizer=tokenizer,
         prompts=harmless_prompts,
-        target_texts=baseline_targets,
+        target_token_ids=baseline_target_ids,
         device=cfg.device,
         cache_factory=None,
     )
@@ -158,7 +158,7 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             model=model,
             tokenizer=tokenizer,
             prompts=harmless_prompts,
-            target_texts=baseline_targets,
+            target_token_ids=baseline_target_ids,
             device=cfg.device,
             cache_factory=cache_factory,
         )
