@@ -89,6 +89,7 @@ def _load_model_and_tokenizer(cfg: BenchmarkConfig):
         quantization_config=quant_config,
         torch_dtype=dtype,
         device_map="auto" if cfg.device == "cuda" else None,
+        attn_implementation="eager",
     )
     model.eval()
     if cfg.device != "cuda":
