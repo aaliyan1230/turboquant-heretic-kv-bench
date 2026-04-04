@@ -42,6 +42,7 @@ class EvalResult:
     total: int
     avg_kl_to_baseline: float
     avg_nll_delta_to_baseline: float
+    avg_token_disagreement_to_baseline: float
     avg_latency_sec: float
     cache_stats: dict
 
@@ -111,6 +112,7 @@ def generate_target_token_ids(
     batch_size: int,
     device: str,
     max_new_tokens: int,
+    cache_factory: Callable[[], TurboQuantDynamicCache] | None = None,
 ) -> list[list[int]]:
     targets: list[list[int]] = []
     for i in range(0, len(prompts), batch_size):
@@ -122,11 +124,13 @@ def generate_target_token_ids(
             return_token_type_ids=False,
         ).to(device)
 
+        cache = cache_factory() if cache_factory is not None else None
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             use_cache=True,
+            past_key_values=cache,
             pad_token_id=tokenizer.pad_token_id,
         )
 
@@ -280,3 +284,27 @@ def compute_teacher_forced_nll(
     if total_tokens == 0:
         return 0.0
     return total_nll / total_tokens
+
+
+def compute_token_disagreement(
+    current_token_ids: list[list[int]],
+    baseline_token_ids: list[list[int]],
+) -> float:
+    total_positions = 0
+    total_mismatches = 0
+
+    for current, baseline in zip(current_token_ids, baseline_token_ids):
+        max_len = max(len(current), len(baseline))
+        if max_len == 0:
+            continue
+        min_len = min(len(current), len(baseline))
+
+        mismatch = sum(1 for i in range(min_len) if current[i] != baseline[i])
+        mismatch += abs(len(current) - len(baseline))
+
+        total_positions += max_len
+        total_mismatches += mismatch
+
+    if total_positions == 0:
+        return 0.0
+    return total_mismatches / total_positions
