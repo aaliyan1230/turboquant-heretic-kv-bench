@@ -41,6 +41,7 @@ class EvalResult:
     refusals: int
     total: int
     avg_kl_to_baseline: float
+    avg_nll_delta_to_baseline: float
     avg_latency_sec: float
     cache_stats: dict
 
@@ -192,3 +193,60 @@ def compute_kl_to_baseline(
         log_target=True,
     )
     return torch.nan_to_num(kl, nan=0.0, posinf=0.0, neginf=0.0).item()
+
+
+@torch.no_grad()
+def compute_teacher_forced_nll(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    prompts: list[str],
+    target_texts: list[str],
+    device: str,
+    cache_factory: Callable[[], TurboQuantDynamicCache] | None = None,
+) -> float:
+    """Average token-level NLL for fixed continuations under optional cache quantization."""
+    total_nll = 0.0
+    total_tokens = 0
+
+    for prompt, target_text in zip(prompts, target_texts):
+        target_ids = tokenizer(
+            target_text,
+            add_special_tokens=False,
+        )["input_ids"]
+        if not target_ids:
+            continue
+
+        prompt_ids = tokenizer(
+            prompt,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )["input_ids"].to(device)
+
+        cache = cache_factory() if cache_factory is not None else None
+        outputs = model(
+            input_ids=prompt_ids,
+            use_cache=True,
+            past_key_values=cache,
+            return_dict=True,
+        )
+        logits = outputs.logits[:, -1, :]
+        past = outputs.past_key_values
+
+        for token_id in target_ids:
+            logprobs = _stable_log_softmax(logits)
+            total_nll += -logprobs[0, token_id].item()
+            total_tokens += 1
+
+            next_token = torch.tensor([[token_id]], device=device, dtype=torch.long)
+            outputs = model(
+                input_ids=next_token,
+                use_cache=True,
+                past_key_values=past,
+                return_dict=True,
+            )
+            logits = outputs.logits[:, -1, :]
+            past = outputs.past_key_values
+
+    if total_tokens == 0:
+        return 0.0
+    return total_nll / total_tokens

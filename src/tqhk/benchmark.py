@@ -12,6 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from .cache import CacheConfig, TurboQuantDynamicCache
 from .evaluation import (
+    compute_teacher_forced_nll,
     EvalResult,
     compute_kl_to_baseline,
     generate_responses,
@@ -37,6 +38,7 @@ class BenchmarkConfig:
     harmful_split: str = "test[:100]"
     batch_size: int = 4
     kl_max_new_tokens: int = 8
+    nll_target_new_tokens: int = 32
     max_new_tokens: int = 64
     filler_repetitions: int = 0
     output_csv: str = "results/benchmark_results.csv"
@@ -119,6 +121,24 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
         cache_factory=None,
     )
 
+    baseline_targets, _, _ = generate_responses(
+        model=model,
+        tokenizer=tokenizer,
+        prompts=harmless_prompts,
+        batch_size=cfg.batch_size,
+        device=cfg.device,
+        max_new_tokens=cfg.nll_target_new_tokens,
+        cache_factory=None,
+    )
+    baseline_nll = compute_teacher_forced_nll(
+        model=model,
+        tokenizer=tokenizer,
+        prompts=harmless_prompts,
+        target_texts=baseline_targets,
+        device=cfg.device,
+        cache_factory=None,
+    )
+
     rows: list[dict] = []
 
     for run in run_configs:
@@ -134,6 +154,15 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             cache_factory=cache_factory,
         )
         kl = compute_kl_to_baseline(logprobs, baseline_logprobs)
+        run_nll = compute_teacher_forced_nll(
+            model=model,
+            tokenizer=tokenizer,
+            prompts=harmless_prompts,
+            target_texts=baseline_targets,
+            device=cfg.device,
+            cache_factory=cache_factory,
+        )
+        nll_delta = run_nll - baseline_nll
 
         harmful_responses, avg_latency, cache_stats = generate_responses(
             model=model,
@@ -151,6 +180,7 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             refusals=refusal_count,
             total=len(harmful_responses),
             avg_kl_to_baseline=kl,
+            avg_nll_delta_to_baseline=nll_delta,
             avg_latency_sec=avg_latency,
             cache_stats=cache_stats,
         )
