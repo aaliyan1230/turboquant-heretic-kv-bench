@@ -36,6 +36,7 @@ class BenchmarkConfig:
     harmless_split: str = "test[:100]"
     harmful_split: str = "test[:100]"
     batch_size: int = 4
+    kl_max_new_tokens: int = 8
     max_new_tokens: int = 64
     filler_repetitions: int = 0
     output_csv: str = "results/benchmark_results.csv"
@@ -114,6 +115,7 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
         prompts=harmless_prompts,
         batch_size=cfg.batch_size,
         device=cfg.device,
+        max_new_tokens=cfg.kl_max_new_tokens,
         cache_factory=None,
     )
 
@@ -128,6 +130,7 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             prompts=harmless_prompts,
             batch_size=cfg.batch_size,
             device=cfg.device,
+            max_new_tokens=cfg.kl_max_new_tokens,
             cache_factory=cache_factory,
         )
         kl = compute_kl_to_baseline(logprobs, baseline_logprobs)

@@ -66,6 +66,7 @@ def get_first_token_logprobs(
     prompts: list[str],
     batch_size: int,
     device: str,
+    max_new_tokens: int = 1,
     cache_factory: Callable[[], TurboQuantDynamicCache] | None = None,
 ) -> torch.Tensor:
     all_logprobs = []
@@ -80,7 +81,7 @@ def get_first_token_logprobs(
         cache = cache_factory() if cache_factory is not None else None
         outputs = model.generate(
             **inputs,
-            max_new_tokens=1,
+            max_new_tokens=max_new_tokens,
             output_scores=True,
             return_dict_in_generate=True,
             do_sample=False,
@@ -88,8 +89,16 @@ def get_first_token_logprobs(
             past_key_values=cache,
             pad_token_id=tokenizer.pad_token_id,
         )
-        logits = outputs.scores[0]
-        all_logprobs.append(_stable_log_softmax(logits).cpu())
+        if not outputs.scores:
+            continue
+
+        # Concatenate all generated steps to measure continuation-level drift.
+        step_logprobs = [_stable_log_softmax(step_logits).cpu() for step_logits in outputs.scores]
+        all_logprobs.append(torch.cat(step_logprobs, dim=0))
+
+    if not all_logprobs:
+        return torch.empty((0, 0), dtype=torch.float32)
+
     return torch.cat(all_logprobs, dim=0)
 
 
@@ -159,6 +168,17 @@ def generate_responses(
 def compute_kl_to_baseline(
     current_logprobs: torch.Tensor, baseline_logprobs: torch.Tensor
 ) -> float:
+    if current_logprobs.numel() == 0 or baseline_logprobs.numel() == 0:
+        return 0.0
+
+    if current_logprobs.shape != baseline_logprobs.shape:
+        # Different decoding lengths can happen if EOS is reached earlier in one run.
+        n = min(current_logprobs.shape[0], baseline_logprobs.shape[0])
+        if n == 0:
+            return 0.0
+        current_logprobs = current_logprobs[:n]
+        baseline_logprobs = baseline_logprobs[:n]
+
     current = torch.nan_to_num(current_logprobs, nan=-1e4, posinf=1e4, neginf=-1e4)
     baseline = torch.nan_to_num(baseline_logprobs, nan=-1e4, posinf=1e4, neginf=-1e4)
 
