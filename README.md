@@ -107,7 +107,7 @@ This repo is intended to be easy to rerun on Kaggle or any CUDA machine without 
 ```bash
 pip install -e .
 python scripts/run_benchmark.py \
-  --model "Qwen/Qwen2.5-1.5B-Instruct" \
+  --model "Qwen/Qwen2.5-3B-Instruct" \
   --harmful-split "test[:100]" \
   --harmless-split "test[:100]" \
   --batch-size 4 \
