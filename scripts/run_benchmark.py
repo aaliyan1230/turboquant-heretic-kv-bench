@@ -74,15 +74,15 @@ def main() -> None:
             ),
         ),
         RunConfig(
-            name="tq_k8_v4_dynamic_rw",
+            name="tq_k4_v2_rw128_prot2",
             use_turboquant_cache=True,
             cache_config=CacheConfig(
-                key_bits=8,
-                value_bits=4,
-                residual_mode="dynamic",
-                dynamic_fraction=0.05,
-                dynamic_min=32,
-                dynamic_max=256,
+                key_bits=4,
+                value_bits=2,
+                residual_mode="fixed",
+                residual_window=128,
+                protected_layers=2,
+                protected_bits=8,
             ),
         ),
     ]

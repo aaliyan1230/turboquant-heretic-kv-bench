@@ -6,4 +6,5 @@ results/*.csv
 results/*.json
 results/*.md
 !results/.gitkeep
+!results/qwen25_3b_snapshot.csv
 .env

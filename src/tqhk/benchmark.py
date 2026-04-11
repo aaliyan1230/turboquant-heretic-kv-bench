@@ -47,6 +47,39 @@ class BenchmarkConfig:
     output_json: str = "results/benchmark_results.json"
 
 
+def _prompt_token_stats(tokenizer, prompts: list[str]) -> dict[str, float]:
+    lengths: list[int] = []
+    for i in range(0, len(prompts), 32):
+        batch = prompts[i : i + 32]
+        encoded = tokenizer(
+            batch,
+            padding=False,
+            add_special_tokens=False,
+            return_token_type_ids=False,
+        )
+        lengths.extend(len(ids) for ids in encoded["input_ids"])
+
+    if not lengths:
+        return {"avg": 0.0, "max": 0.0, "min": 0.0}
+
+    return {
+        "avg": sum(lengths) / len(lengths),
+        "max": float(max(lengths)),
+        "min": float(min(lengths)),
+    }
+
+
+def _cuda_memory_stats(device: str) -> dict[str, float]:
+    if device != "cuda" or not torch.cuda.is_available():
+        return {}
+    return {
+        "gpu_allocated_mb": torch.cuda.memory_allocated() / (1024**2),
+        "gpu_reserved_mb": torch.cuda.memory_reserved() / (1024**2),
+        "gpu_peak_allocated_mb": torch.cuda.max_memory_allocated() / (1024**2),
+        "gpu_peak_reserved_mb": torch.cuda.max_memory_reserved() / (1024**2),
+    }
+
+
 def _make_cache_factory(run: RunConfig, n_layers: int):
     if not run.use_turboquant_cache:
         return None
@@ -106,6 +139,8 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
     harmless_prompts, harmful_prompts = _prepare_prompts(cfg)
     model, tokenizer = _load_model_and_tokenizer(cfg)
     n_layers = model.config.num_hidden_layers
+    harmless_prompt_stats = _prompt_token_stats(tokenizer, harmless_prompts)
+    harmful_prompt_stats = _prompt_token_stats(tokenizer, harmful_prompts)
 
     baseline_run = next((x for x in run_configs if not x.use_turboquant_cache), None)
     if baseline_run is None:
@@ -144,6 +179,10 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
     rows: list[dict] = []
 
     for run in run_configs:
+        if cfg.device == "cuda" and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize()
+
         cache_factory = _make_cache_factory(run, n_layers=n_layers)
 
         logprobs = get_first_token_logprobs(
@@ -190,6 +229,7 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             cache_factory=cache_factory,
         )
         refusal_count = sum(is_refusal(r) for r in harmful_responses)
+        memory_stats = _cuda_memory_stats(cfg.device)
 
         result = EvalResult(
             refusal_rate=refusal_count / max(len(harmful_responses), 1),
@@ -206,7 +246,12 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             "run_name": run.name,
             "model_name": cfg.model_name,
             "filler_repetitions": cfg.filler_repetitions,
+            "harmless_prompt_avg_tokens": harmless_prompt_stats["avg"],
+            "harmless_prompt_max_tokens": harmless_prompt_stats["max"],
+            "harmful_prompt_avg_tokens": harmful_prompt_stats["avg"],
+            "harmful_prompt_max_tokens": harmful_prompt_stats["max"],
             **asdict(result),
+            **memory_stats,
             "cache_config": asdict(run.cache_config),
         }
         rows.append(row)

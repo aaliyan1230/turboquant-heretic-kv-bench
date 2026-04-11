@@ -2,7 +2,21 @@
 
 This repo asks a narrow question: if you compress the KV cache with a TurboQuant-style scheme, what changes first, safety behavior or model fidelity?
 
-The current answer is: on the latest stored 3B notebook run, refusal rate stayed flat while distributional drift rose as compression became more aggressive. In other words, this benchmark already surfaces a measurable compression-vs-fidelity tradeoff, but it does not show an obvious refusal-rate effect in the sampled run.
+The current answer is: on the latest stored 3B Kaggle notebook run, refusal rate stayed flat while distributional drift rose as compression became more aggressive. In other words, this benchmark already surfaces a measurable compression-vs-fidelity tradeoff, but it does not show an obvious refusal-rate effect in the sampled run.
+
+## Status
+
+The repo achieved its original narrow goal: it can detect cache-compression-induced fidelity drift on matched prompt sets.
+
+What it has not achieved yet:
+
+- no refusal-rate shift in the latest stored sample,
+- no speedup in the current Python cache path,
+- no clean long-context retrieval failure boundary in the stored supplemental probe.
+
+![Latest Kaggle 3B snapshot](results/qwen25_3b_tradeoff.svg)
+
+The committed snapshot data used for the chart is stored in [`results/qwen25_3b_snapshot.csv`](results/qwen25_3b_snapshot.csv). It was extracted from the latest executed outputs already present in the Kaggle-first notebook.
 
 ## What We Achieved
 
@@ -11,7 +25,7 @@ The current answer is: on the latest stored 3B notebook run, refusal rate stayed
 - Measured more than just output text: refusal rate, KL drift, teacher-forced NLL delta, token disagreement, latency, and cache compression stats.
 - Added notebook checks that support two useful claims:
   - asymmetric K/V quantization is motivated by observed key/value norm asymmetry,
-  - moderate cache compression can preserve long-context retrieval better than aggressive settings.
+  - the long-context retrieval sanity check is directionally useful, but the latest stored probe is still qualitative rather than a decisive failure-threshold test.
 
 ## Latest Result Snapshot
 
@@ -34,7 +48,7 @@ Practical interpretation:
 The notebook also includes two supporting checks:
 
 - K/V norm asymmetry: a stored run reports that key norms are substantially larger than value norms, which supports allocating more bits to keys than values.
-- Needle retrieval sanity check: the notebook compares baseline, moderate compression, and aggressive compression on a long-context retrieval task to verify that weaker settings fail first.
+- Needle retrieval sanity check: the notebook compares baseline, moderate compression, and aggressive compression on a long-context retrieval task. In the latest stored probe, all configurations still recovered the needle, so this check currently supports robustness inspection more than a hard failure claim.
 
 ## Methodology
 
@@ -113,5 +127,6 @@ For the full analysis path, use the notebook in `notebooks/`. It is the canonica
 - Python `>=3.10`
 - CUDA GPU
 - Kaggle T4 is the intended low-friction target
+- The notebook is expected to run on Kaggle rather than a local laptop or CPU-only environment
 
 If you are running on Kaggle, the notebook already contains clone, install, and reload cells so you do not have to reconstruct the environment manually.

@@ -41,6 +41,10 @@ class TurboQuantDynamicCache(DynamicCache):
         self._total_seq: dict[int, int] = {}
         self._compressed_tokens: dict[int, int] = {}
 
+    @staticmethod
+    def _tensor_num_bytes(tensor: torch.Tensor) -> int:
+        return tensor.nelement() * tensor.element_size()
+
     def _get_residual_window(self, total_seq: int) -> int:
         if self.config.residual_mode == "dynamic":
             rw = int(self.config.dynamic_fraction * total_seq)
@@ -115,17 +119,21 @@ class TurboQuantDynamicCache(DynamicCache):
 
         for comp_k, comp_v in zip(self._chunks_k[layer_idx], self._chunks_v[layer_idx]):
             deq_k, deq_v = compressor.decompress_kv(comp_k, comp_v)
-            parts_k.append(deq_k.to(key_states.dtype).contiguous())
-            parts_v.append(deq_v.to(value_states.dtype).contiguous())
+            parts_k.append(deq_k.to(key_states.dtype))
+            parts_v.append(deq_v.to(value_states.dtype))
 
         recent_k = torch.cat(self._recent_k[layer_idx], dim=2)
         recent_v = torch.cat(self._recent_v[layer_idx], dim=2)
-        parts_k.append(recent_k.contiguous())
-        parts_v.append(recent_v.contiguous())
+        parts_k.append(recent_k)
+        parts_v.append(recent_v)
 
         # SDPA expects the last dimension to be contiguous.
-        full_k = torch.cat(parts_k, dim=2).contiguous()
-        full_v = torch.cat(parts_v, dim=2).contiguous()
+        if len(parts_k) == 1:
+            full_k = parts_k[0].contiguous()
+            full_v = parts_v[0].contiguous()
+        else:
+            full_k = torch.cat(parts_k, dim=2).contiguous()
+            full_v = torch.cat(parts_v, dim=2).contiguous()
 
         while len(self.layers) <= layer_idx:
             self.layers.append(DynamicLayer())
@@ -138,12 +146,40 @@ class TurboQuantDynamicCache(DynamicCache):
     def get_stats(self) -> dict:
         total_tokens = sum(self._total_seq.values())
         compressed_tokens = sum(self._compressed_tokens.values())
+        compressed_bytes = 0
+        fp16_equivalent_bytes = 0
+        recent_bytes = 0
+
+        for layer_idx, chunks_k in self._chunks_k.items():
+            compressor = self._compressors.get(layer_idx)
+            for comp_k, comp_v in zip(chunks_k, self._chunks_v[layer_idx]):
+                if compressor is None:
+                    continue
+                mem = compressor.kv_memory_bytes(comp_k, comp_v)
+                compressed_bytes += mem["compressed_bytes"]
+                fp16_equivalent_bytes += mem["fp16_equivalent_bytes"]
+
+        for recent_parts in self._recent_k.values():
+            recent_bytes += sum(self._tensor_num_bytes(tensor) for tensor in recent_parts)
+        for recent_parts in self._recent_v.values():
+            recent_bytes += sum(self._tensor_num_bytes(tensor) for tensor in recent_parts)
+
+        actual_total_bytes = compressed_bytes + recent_bytes
+        fp16_equivalent_total_bytes = fp16_equivalent_bytes + recent_bytes
         return {
             "layers_seen": len(self._total_seq),
             "total_tokens": total_tokens,
             "compressed_tokens": compressed_tokens,
             "compression_token_fraction": (
                 compressed_tokens / total_tokens if total_tokens > 0 else 0.0
+            ),
+            "compressed_bytes": compressed_bytes,
+            "fp16_equivalent_bytes": fp16_equivalent_total_bytes,
+            "actual_total_bytes": actual_total_bytes,
+            "memory_savings_ratio": (
+                fp16_equivalent_total_bytes / actual_total_bytes
+                if actual_total_bytes > 0
+                else 0.0
             ),
             "residual_mode": self.config.residual_mode,
             "residual_window": self.config.residual_window,
@@ -152,4 +188,6 @@ class TurboQuantDynamicCache(DynamicCache):
             "dynamic_max": self.config.dynamic_max,
             "key_bits": self.config.key_bits,
             "value_bits": self.config.value_bits,
+            "protected_layers": self.config.protected_layers,
+            "protected_bits": self.config.protected_bits,
         }

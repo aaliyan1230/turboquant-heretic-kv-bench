@@ -153,6 +153,7 @@ class MSECompressor:
             "vec_norms": norms.to(torch.float16).reshape(bsz, n_heads, seq_len),
             "shape": (bsz, n_heads, seq_len, head_dim),
             "idx_pad": pad,
+            "dtype_bytes": states.element_size(),
         }
 
     @torch.no_grad()
@@ -177,6 +178,19 @@ class MSECompressor:
 
         reconstructed = (self.centroids[indices] @ self.rotation) * vec_norms
         return reconstructed.reshape(bsz, n_heads, seq_len, head_dim)
+
+    def compressed_num_bytes(self, compressed: dict) -> int:
+        total = 0
+        for key in ("idx_bytes", "vec_norms"):
+            tensor = compressed.get(key)
+            if isinstance(tensor, torch.Tensor):
+                total += tensor.nelement() * tensor.element_size()
+        return total
+
+    def fp_equivalent_num_bytes(self, compressed: dict) -> int:
+        bsz, n_heads, seq_len, head_dim = compressed["shape"]
+        dtype_bytes = int(compressed.get("dtype_bytes", 2))
+        return bsz * n_heads * seq_len * head_dim * dtype_bytes
 
 
 class TurboQuantV3:
@@ -233,3 +247,20 @@ class TurboQuantV3:
             self.key_compressor.decompress(comp_keys),
             self.value_compressor.decompress(comp_values),
         )
+
+    def kv_memory_bytes(self, comp_keys: dict, comp_values: dict) -> dict:
+        compressed_bytes = self.key_compressor.compressed_num_bytes(
+            comp_keys
+        ) + self.value_compressor.compressed_num_bytes(comp_values)
+        fp16_equivalent_bytes = self.key_compressor.fp_equivalent_num_bytes(
+            comp_keys
+        ) + self.value_compressor.fp_equivalent_num_bytes(comp_values)
+        return {
+            "compressed_bytes": compressed_bytes,
+            "fp16_equivalent_bytes": fp16_equivalent_bytes,
+            "compression_ratio": (
+                fp16_equivalent_bytes / compressed_bytes
+                if compressed_bytes > 0
+                else 0.0
+            ),
+        }
