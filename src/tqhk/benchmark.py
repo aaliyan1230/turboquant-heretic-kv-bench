@@ -33,7 +33,7 @@ class RunConfig:
 
 @dataclass
 class BenchmarkConfig:
-    model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    model_name: str = "Qwen/Qwen2.5-3B-Instruct"
     device: str = "cuda"
     load_in_4bit: bool = True
     harmless_split: str = "test[:100]"

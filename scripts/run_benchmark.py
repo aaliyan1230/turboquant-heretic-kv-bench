@@ -18,7 +18,7 @@ from tqhk.cache import CacheConfig
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run TurboQuant x refusal benchmark")
-    parser.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
+    parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--harmful-split", default="test[:100]")
     parser.add_argument("--harmless-split", default="test[:100]")
