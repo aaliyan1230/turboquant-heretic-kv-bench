@@ -7,6 +7,12 @@ This repo focuses on one metric where TurboQuant gives clear, repeatable gains i
 
 This is intentionally aligned with the most practical claim from community TurboQuant implementations: memory compression is the core win in Python-first paths, while absolute decode speedups usually require backend/kernel integration.
 
+## At A Glance
+
+- measurable KV memory win: `2.27x` to `3.30x` estimated storage gain on the latest Kaggle 3B run,
+- best balanced config: `tq_k8_v4_rw128` (`2.27x` gain with low disagreement),
+- practical runtime profile: compressed runs remain close to baseline latency (about `1.05x` to `1.10x`).
+
 ## Core Goal
 
 Find TurboQuant cache settings that maximize KV storage gain while preserving acceptable generation quality.
