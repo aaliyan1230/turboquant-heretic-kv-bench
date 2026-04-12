@@ -34,10 +34,10 @@ class TurboQuantDynamicCache(DynamicCache):
         self.n_layers = n_layers
 
         self._compressors: dict[int, TurboQuantV3] = {}
-        self._chunks_k: dict[int, list[dict]] = {}
-        self._chunks_v: dict[int, list[dict]] = {}
         self._total_seq: dict[int, int] = {}
         self._compressed_tokens: dict[int, int] = {}
+        self._compressed_bytes: dict[int, int] = {}
+        self._compressed_fp16_equivalent_bytes: dict[int, int] = {}
 
     @staticmethod
     def _tensor_num_bytes(tensor: torch.Tensor) -> int:
@@ -81,11 +81,11 @@ class TurboQuantDynamicCache(DynamicCache):
             self.layers.append(DynamicLayer())
         layer = self.layers[layer_idx]
 
-        if layer_idx not in self._chunks_k:
-            self._chunks_k[layer_idx] = []
-            self._chunks_v[layer_idx] = []
+        if layer_idx not in self._total_seq:
             self._total_seq[layer_idx] = 0
             self._compressed_tokens[layer_idx] = 0
+            self._compressed_bytes[layer_idx] = 0
+            self._compressed_fp16_equivalent_bytes[layer_idx] = 0
 
         existing_k = getattr(layer, "keys", None)
         existing_v = getattr(layer, "values", None)
@@ -110,8 +110,27 @@ class TurboQuantDynamicCache(DynamicCache):
             to_compress_k = full_k[:, :, start:end, :]
             to_compress_v = full_v[:, :, start:end, :]
             comp_k, comp_v = compressor.compress_kv(to_compress_k, to_compress_v)
-            self._chunks_k[layer_idx].append(comp_k)
-            self._chunks_v[layer_idx].append(comp_v)
+            mem = compressor.kv_memory_bytes(comp_k, comp_v)
+            self._compressed_bytes[layer_idx] += mem["compressed_bytes"]
+            self._compressed_fp16_equivalent_bytes[layer_idx] += mem[
+                "fp16_equivalent_bytes"
+            ]
+
+            deq_k, deq_v = compressor.decompress_kv(comp_k, comp_v)
+            approx_k = deq_k.to(key_states.dtype).contiguous()
+            approx_v = deq_v.to(value_states.dtype).contiguous()
+
+            prefix_k = full_k[:, :, :start, :]
+            suffix_k = full_k[:, :, end:, :]
+            prefix_v = full_v[:, :, :start, :]
+            suffix_v = full_v[:, :, end:, :]
+
+            k_parts = [part for part in (prefix_k, approx_k, suffix_k) if part.shape[2] > 0]
+            v_parts = [part for part in (prefix_v, approx_v, suffix_v) if part.shape[2] > 0]
+            full_k = torch.cat(k_parts, dim=2).contiguous()
+            full_v = torch.cat(v_parts, dim=2).contiguous()
+            layer.keys = full_k
+            layer.values = full_v
             self._compressed_tokens[layer_idx] += overflow
 
         return full_k, full_v
@@ -122,18 +141,11 @@ class TurboQuantDynamicCache(DynamicCache):
     def get_stats(self) -> dict:
         total_tokens = sum(self._total_seq.values())
         compressed_tokens = sum(self._compressed_tokens.values())
-        compressed_bytes = 0
-        fp16_equivalent_bytes = 0
+        compressed_bytes = sum(self._compressed_bytes.values())
+        compressed_fp16_equivalent_bytes = sum(
+            self._compressed_fp16_equivalent_bytes.values()
+        )
         materialized_bytes = 0
-
-        for layer_idx, chunks_k in self._chunks_k.items():
-            compressor = self._compressors.get(layer_idx)
-            for comp_k, comp_v in zip(chunks_k, self._chunks_v[layer_idx]):
-                if compressor is None:
-                    continue
-                mem = compressor.kv_memory_bytes(comp_k, comp_v)
-                compressed_bytes += mem["compressed_bytes"]
-                fp16_equivalent_bytes += mem["fp16_equivalent_bytes"]
 
         for layer in self.layers:
             keys = getattr(layer, "keys", None)
@@ -143,8 +155,15 @@ class TurboQuantDynamicCache(DynamicCache):
             if isinstance(values, torch.Tensor):
                 materialized_bytes += self._tensor_num_bytes(values)
 
-        actual_total_bytes = compressed_bytes + materialized_bytes
-        fp16_equivalent_total_bytes = fp16_equivalent_bytes
+        estimated_recent_window_bytes = max(
+            materialized_bytes - compressed_fp16_equivalent_bytes,
+            0,
+        )
+        estimated_compressed_total_bytes = (
+            compressed_bytes + estimated_recent_window_bytes
+        )
+        fp16_equivalent_total_bytes = materialized_bytes
+        actual_total_bytes = materialized_bytes
         return {
             "layers_seen": len(self._total_seq),
             "total_tokens": total_tokens,
@@ -159,6 +178,12 @@ class TurboQuantDynamicCache(DynamicCache):
             "memory_savings_ratio": (
                 fp16_equivalent_total_bytes / actual_total_bytes
                 if actual_total_bytes > 0
+                else 0.0
+            ),
+            "estimated_compressed_total_bytes": estimated_compressed_total_bytes,
+            "estimated_compression_ratio": (
+                fp16_equivalent_total_bytes / estimated_compressed_total_bytes
+                if estimated_compressed_total_bytes > 0
                 else 0.0
             ),
             "residual_mode": self.config.residual_mode,
