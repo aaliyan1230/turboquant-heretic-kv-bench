@@ -34,9 +34,9 @@ These numbers come from the latest executed analysis already stored in the Kaggl
 | Run | Refusal rate | KL to baseline | Token disagreement | Avg latency | Estimated compression ratio |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `baseline_fp16_cache` | `0.25` | `0.000` | `0.0000` | `3.48s` | `-` |
-| `tq_k8_v4_rw128` | `0.25` | `1.275` | `0.0328` | `4.86s` | `2.28x` |
-| `tq_k6_v4_rw128` | `0.25` | `2.862` | `0.0828` | `4.78s` | `2.28x` |
-| `tq_k4_v2_rw128_prot2` | `0.25` | `3.458` | `0.1344` | `4.73s` | `3.34x` |
+| `tq_k8_v4_rw128` | `0.25` | `1.279` | `0.0328` | `3.82s` | `2.27x` |
+| `tq_k6_v4_rw128` | `0.25` | `2.862` | `0.0828` | `3.69s` | `2.27x` |
+| `tq_k4_v2_rw128_prot2` | `0.25` | `3.459` | `0.1344` | `3.66s` | `3.30x` |
 
 Practical interpretation:
 
@@ -55,7 +55,7 @@ The repo now includes a concrete TurboQuant cache-path optimization that materia
 
 Measured impact in this repo:
 
-- End-to-end 3B benchmark latency for compressed runs improved from about `24-25s` (older path) to about `4.7-4.9s` (current path), while KL and token disagreement remained non-zero.
+- End-to-end 3B benchmark latency for compressed runs improved from about `24-25s` (older path) to about `3.66-3.82s` (current path), while KL and token disagreement remained non-zero.
 - Synthetic cache-update microbenchmark (same tensor shapes, prefill `1024`, decode `256`) showed update-time reduction from `0.340s` at chunk size `1` to `0.163s` at chunk size `32`.
 
 Reproduce the microbenchmark locally:
