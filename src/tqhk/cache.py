@@ -36,8 +36,6 @@ class TurboQuantDynamicCache(DynamicCache):
         self._compressors: dict[int, TurboQuantV3] = {}
         self._chunks_k: dict[int, list[dict]] = {}
         self._chunks_v: dict[int, list[dict]] = {}
-        self._recent_k: dict[int, list[torch.Tensor]] = {}
-        self._recent_v: dict[int, list[torch.Tensor]] = {}
         self._total_seq: dict[int, int] = {}
         self._compressed_tokens: dict[int, int] = {}
 
@@ -79,64 +77,42 @@ class TurboQuantDynamicCache(DynamicCache):
 
         compressor = self._get_compressor(layer_idx, head_dim, device)
 
+        while len(self.layers) <= layer_idx:
+            self.layers.append(DynamicLayer())
+        layer = self.layers[layer_idx]
+
         if layer_idx not in self._chunks_k:
             self._chunks_k[layer_idx] = []
             self._chunks_v[layer_idx] = []
-            self._recent_k[layer_idx] = []
-            self._recent_v[layer_idx] = []
             self._total_seq[layer_idx] = 0
             self._compressed_tokens[layer_idx] = 0
 
+        existing_k = getattr(layer, "keys", None)
+        existing_v = getattr(layer, "values", None)
+        if existing_k is None:
+            full_k = key_states.contiguous()
+            full_v = value_states.contiguous()
+        else:
+            full_k = torch.cat((existing_k, key_states), dim=2).contiguous()
+            full_v = torch.cat((existing_v, value_states), dim=2).contiguous()
+
+        layer.keys = full_k
+        layer.values = full_v
         self._total_seq[layer_idx] += new_seq
 
-        self._recent_k[layer_idx].append(key_states)
-        self._recent_v[layer_idx].append(value_states)
-
-        recent_k = torch.cat(self._recent_k[layer_idx], dim=2)
-        recent_v = torch.cat(self._recent_v[layer_idx], dim=2)
-
         residual_window = self._get_residual_window(self._total_seq[layer_idx])
-        if residual_window == 0:
-            overflow = recent_k.shape[2]
-        else:
-            overflow = max(recent_k.shape[2] - residual_window, 0)
+        compress_upto = max(self._total_seq[layer_idx] - residual_window, 0)
+        overflow = compress_upto - self._compressed_tokens[layer_idx]
 
         if overflow > 0:
-            to_compress_k = recent_k[:, :, :overflow, :]
-            to_compress_v = recent_v[:, :, :overflow, :]
+            start = self._compressed_tokens[layer_idx]
+            end = compress_upto
+            to_compress_k = full_k[:, :, start:end, :]
+            to_compress_v = full_v[:, :, start:end, :]
             comp_k, comp_v = compressor.compress_kv(to_compress_k, to_compress_v)
             self._chunks_k[layer_idx].append(comp_k)
             self._chunks_v[layer_idx].append(comp_v)
             self._compressed_tokens[layer_idx] += overflow
-
-            recent_k = recent_k[:, :, overflow:, :]
-            recent_v = recent_v[:, :, overflow:, :]
-            self._recent_k[layer_idx] = [recent_k]
-            self._recent_v[layer_idx] = [recent_v]
-
-        parts_k = []
-        parts_v = []
-
-        for comp_k, comp_v in zip(self._chunks_k[layer_idx], self._chunks_v[layer_idx]):
-            deq_k, deq_v = compressor.decompress_kv(comp_k, comp_v)
-            parts_k.append(deq_k.to(key_states.dtype))
-            parts_v.append(deq_v.to(value_states.dtype))
-
-        recent_k = torch.cat(self._recent_k[layer_idx], dim=2)
-        recent_v = torch.cat(self._recent_v[layer_idx], dim=2)
-        parts_k.append(recent_k)
-        parts_v.append(recent_v)
-
-        # SDPA expects the last dimension to be contiguous.
-        if len(parts_k) == 1:
-            full_k = parts_k[0].contiguous()
-            full_v = parts_v[0].contiguous()
-        else:
-            full_k = torch.cat(parts_k, dim=2).contiguous()
-            full_v = torch.cat(parts_v, dim=2).contiguous()
-
-        while len(self.layers) <= layer_idx:
-            self.layers.append(DynamicLayer())
 
         return full_k, full_v
 
@@ -148,7 +124,7 @@ class TurboQuantDynamicCache(DynamicCache):
         compressed_tokens = sum(self._compressed_tokens.values())
         compressed_bytes = 0
         fp16_equivalent_bytes = 0
-        recent_bytes = 0
+        materialized_bytes = 0
 
         for layer_idx, chunks_k in self._chunks_k.items():
             compressor = self._compressors.get(layer_idx)
@@ -159,13 +135,16 @@ class TurboQuantDynamicCache(DynamicCache):
                 compressed_bytes += mem["compressed_bytes"]
                 fp16_equivalent_bytes += mem["fp16_equivalent_bytes"]
 
-        for recent_parts in self._recent_k.values():
-            recent_bytes += sum(self._tensor_num_bytes(tensor) for tensor in recent_parts)
-        for recent_parts in self._recent_v.values():
-            recent_bytes += sum(self._tensor_num_bytes(tensor) for tensor in recent_parts)
+        for layer in self.layers:
+            keys = getattr(layer, "keys", None)
+            values = getattr(layer, "values", None)
+            if isinstance(keys, torch.Tensor):
+                materialized_bytes += self._tensor_num_bytes(keys)
+            if isinstance(values, torch.Tensor):
+                materialized_bytes += self._tensor_num_bytes(values)
 
-        actual_total_bytes = compressed_bytes + recent_bytes
-        fp16_equivalent_total_bytes = fp16_equivalent_bytes + recent_bytes
+        actual_total_bytes = compressed_bytes + materialized_bytes
+        fp16_equivalent_total_bytes = fp16_equivalent_bytes
         return {
             "layers_seen": len(self._total_seq),
             "total_tokens": total_tokens,
@@ -175,6 +154,7 @@ class TurboQuantDynamicCache(DynamicCache):
             ),
             "compressed_bytes": compressed_bytes,
             "fp16_equivalent_bytes": fp16_equivalent_total_bytes,
+            "materialized_cache_bytes": materialized_bytes,
             "actual_total_bytes": actual_total_bytes,
             "memory_savings_ratio": (
                 fp16_equivalent_total_bytes / actual_total_bytes
