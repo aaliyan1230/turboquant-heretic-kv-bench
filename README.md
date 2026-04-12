@@ -11,7 +11,7 @@ The repo achieved its original narrow goal: it can detect cache-compression-indu
 What it has not achieved yet:
 
 - no refusal-rate shift in the latest stored sample,
-- no speedup in the current Python cache path,
+- no absolute decode speedup over fp16 baseline in the current Python cache path,
 - no clean long-context retrieval failure boundary in the stored supplemental probe.
 
 ![Latest Kaggle 3B snapshot](results/qwen25_3b_tradeoff.svg)
@@ -31,19 +31,41 @@ The committed snapshot data used for the chart is stored in [`results/qwen25_3b_
 
 These numbers come from the latest executed analysis already stored in the Kaggle notebook using `Qwen/Qwen2.5-3B-Instruct`, `20` harmful prompts, `20` harmless prompts, and `filler_repetitions=32`.
 
-| Run | Refusal rate | KL to baseline | Token disagreement | Avg latency |
-| --- | ---: | ---: | ---: | ---: |
-| `baseline_fp16_cache` | `0.25` | `0.000` | `0.0000` | `3.97s` |
-| `tq_k8_v4_rw128` | `0.25` | `1.275` | `0.0328` | `25.22s` |
-| `tq_k6_v4_rw128` | `0.25` | `2.862` | `0.0828` | `25.19s` |
-| `tq_k4_v2_rw32` | `0.25` | `3.886` | `0.2047` | `25.17s` |
+| Run | Refusal rate | KL to baseline | Token disagreement | Avg latency | Estimated compression ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `baseline_fp16_cache` | `0.25` | `0.000` | `0.0000` | `3.48s` | `-` |
+| `tq_k8_v4_rw128` | `0.25` | `1.275` | `0.0328` | `4.86s` | `2.28x` |
+| `tq_k6_v4_rw128` | `0.25` | `2.862` | `0.0828` | `4.78s` | `2.28x` |
+| `tq_k4_v2_rw128_prot2` | `0.25` | `3.458` | `0.1344` | `4.73s` | `3.34x` |
 
 Practical interpretation:
 
 - The benchmark is sensitive enough to detect fidelity drift.
 - Moderate compression is measurably closer to baseline than aggressive compression.
-- In this implementation, latency gets worse rather than better because the cache path is still Python-heavy.
+- In this implementation, compressed runs are still slower than baseline, but they are now near-baseline instead of catastrophically slower.
 - The meaningful signal today is fidelity degradation under compression, not a shift in refusal rate.
+
+## Tangible Improvement Added
+
+The repo now includes a concrete TurboQuant cache-path optimization that materially improves practicality on the Hugging Face eager path.
+
+- Added approximation-materialized compressed updates so compressed tokens still perturb decode while avoiding full-history re-decompression each step.
+- Added chunked compression updates (`compression_chunk_size`, default `16`) to avoid paying compression/decompression cost for every single-token overflow.
+- Added explicit telemetry for `estimated_compression_ratio` and `pending_uncompressed_tokens` so we can track the tradeoff between update cost and compression strictness.
+
+Measured impact in this repo:
+
+- End-to-end 3B benchmark latency for compressed runs improved from about `24-25s` (older path) to about `4.7-4.9s` (current path), while KL and token disagreement remained non-zero.
+- Synthetic cache-update microbenchmark (same tensor shapes, prefill `1024`, decode `256`) showed update-time reduction from `0.340s` at chunk size `1` to `0.163s` at chunk size `32`.
+
+Reproduce the microbenchmark locally:
+
+```bash
+PYTHONPATH=src python scripts/bench_cache_update.py \
+  --prefill-tokens 1024 \
+  --decode-steps 256 \
+  --chunk-sizes 1 4 8 16 32
+```
 
 The notebook also includes two supporting checks:
 

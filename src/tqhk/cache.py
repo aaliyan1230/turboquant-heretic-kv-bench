@@ -20,6 +20,7 @@ class CacheConfig:
     dynamic_fraction: float = 0.05
     dynamic_min: int = 32
     dynamic_max: int = 256
+    compression_chunk_size: int = 16
     protected_layers: int = 0
     protected_bits: int = 8
     seed: int = 42
@@ -103,10 +104,12 @@ class TurboQuantDynamicCache(DynamicCache):
         residual_window = self._get_residual_window(self._total_seq[layer_idx])
         compress_upto = max(self._total_seq[layer_idx] - residual_window, 0)
         overflow = compress_upto - self._compressed_tokens[layer_idx]
+        chunk_size = max(int(self.config.compression_chunk_size), 1)
+        compress_now = overflow - (overflow % chunk_size)
 
-        if overflow > 0:
+        if compress_now > 0:
             start = self._compressed_tokens[layer_idx]
-            end = compress_upto
+            end = start + compress_now
             to_compress_k = full_k[:, :, start:end, :]
             to_compress_v = full_v[:, :, start:end, :]
             comp_k, comp_v = compressor.compress_kv(to_compress_k, to_compress_v)
@@ -120,18 +123,11 @@ class TurboQuantDynamicCache(DynamicCache):
             approx_k = deq_k.to(key_states.dtype).contiguous()
             approx_v = deq_v.to(value_states.dtype).contiguous()
 
-            prefix_k = full_k[:, :, :start, :]
-            suffix_k = full_k[:, :, end:, :]
-            prefix_v = full_v[:, :, :start, :]
-            suffix_v = full_v[:, :, end:, :]
-
-            k_parts = [part for part in (prefix_k, approx_k, suffix_k) if part.shape[2] > 0]
-            v_parts = [part for part in (prefix_v, approx_v, suffix_v) if part.shape[2] > 0]
-            full_k = torch.cat(k_parts, dim=2).contiguous()
-            full_v = torch.cat(v_parts, dim=2).contiguous()
+            full_k[:, :, start:end, :] = approx_k
+            full_v[:, :, start:end, :] = approx_v
             layer.keys = full_k
             layer.values = full_v
-            self._compressed_tokens[layer_idx] += overflow
+            self._compressed_tokens[layer_idx] += compress_now
 
         return full_k, full_v
 
@@ -191,6 +187,8 @@ class TurboQuantDynamicCache(DynamicCache):
             "dynamic_fraction": self.config.dynamic_fraction,
             "dynamic_min": self.config.dynamic_min,
             "dynamic_max": self.config.dynamic_max,
+            "compression_chunk_size": self.config.compression_chunk_size,
+            "pending_uncompressed_tokens": max(total_tokens - compressed_tokens, 0),
             "key_bits": self.config.key_bits,
             "value_bits": self.config.value_bits,
             "protected_layers": self.config.protected_layers,
