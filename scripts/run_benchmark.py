@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint for TurboQuant x refusal evaluation benchmark."""
+"""CLI entrypoint for TurboQuant KV memory benchmark."""
 
 from __future__ import annotations
 
@@ -17,7 +17,9 @@ from tqhk.cache import CacheConfig
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run TurboQuant x refusal benchmark")
+    parser = argparse.ArgumentParser(
+        description="Run TurboQuant benchmark (memory gain + quality guardrails)"
+    )
     parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--harmful-split", default="test[:100]")
@@ -90,10 +92,14 @@ def main() -> None:
     rows = run_benchmark(cfg=cfg, run_configs=runs)
     print("Completed runs:")
     for row in rows:
+        primary = row.get("primary_metric_value", 0.0)
+        disagree = row.get("quality_guardrail_token_disagreement", 0.0)
+        latency_ratio = row.get("latency_vs_baseline_ratio", 0.0)
         print(
             f"- {row['run_name']}: refusals={row['refusals']}/{row['total']}, "
             f"refusal_rate={row['refusal_rate']:.3f}, kl={row['avg_kl_to_baseline']:.4f}, "
-            f"latency={row['avg_latency_sec']:.3f}s"
+            f"kv_gain={primary:.2f}x, disagreement={disagree:.4f}, "
+            f"latency={row['avg_latency_sec']:.3f}s ({latency_ratio:.2f}x baseline)"
         )
 
 

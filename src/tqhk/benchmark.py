@@ -1,4 +1,4 @@
-"""End-to-end benchmark runner for TurboQuant x refusal evaluation."""
+"""End-to-end benchmark runner for TurboQuant KV memory experiments."""
 
 from __future__ import annotations
 
@@ -255,6 +255,39 @@ def run_benchmark(cfg: BenchmarkConfig, run_configs: list[RunConfig]) -> list[di
             "cache_config": asdict(run.cache_config),
         }
         rows.append(row)
+
+    baseline_row = next(
+        (row for row, run in zip(rows, run_configs) if not run.use_turboquant_cache),
+        None,
+    )
+    baseline_latency = baseline_row.get("avg_latency_sec", 0.0) if baseline_row else 0.0
+
+    for row, run in zip(rows, run_configs):
+        cache_stats = row.get("cache_stats") or {}
+        estimated_ratio = cache_stats.get("estimated_compression_ratio")
+        if run.use_turboquant_cache:
+            primary_value = (
+                float(estimated_ratio)
+                if isinstance(estimated_ratio, (float, int)) and estimated_ratio > 0
+                else 0.0
+            )
+        else:
+            primary_value = 1.0
+
+        row["primary_metric"] = "estimated_kv_storage_gain_x"
+        row["primary_metric_value"] = primary_value
+        row["quality_guardrail_token_disagreement"] = row[
+            "avg_token_disagreement_to_baseline"
+        ]
+        row["passes_quality_guardrail_0p05"] = (
+            row["avg_token_disagreement_to_baseline"] <= 0.05
+        )
+        row["latency_vs_baseline_ratio"] = (
+            row["avg_latency_sec"] / baseline_latency if baseline_latency > 0 else 0.0
+        )
+        row["latency_overhead_pct_vs_baseline"] = (
+            100.0 * (row["latency_vs_baseline_ratio"] - 1.0)
+        )
 
     _write_results(cfg, rows)
     return rows

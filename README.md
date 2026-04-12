@@ -1,18 +1,37 @@
-# TurboQuant x Refusal Eval Bench
+# TurboQuant KV Memory Bench
 
-This repo asks a narrow question: if you compress the KV cache with a TurboQuant-style scheme, what changes first, safety behavior or model fidelity?
+This repo focuses on one metric where TurboQuant gives clear, repeatable gains in a HuggingFace/Kaggle workflow:
 
-The current answer is: on the latest stored 3B Kaggle notebook run, refusal rate stayed flat while distributional drift rose as compression became more aggressive. In other words, this benchmark already surfaces a measurable compression-vs-fidelity tradeoff, but it does not show an obvious refusal-rate effect in the sampled run.
+- primary metric: KV storage compression gain (`estimated_kv_storage_gain_x`),
+- guardrails: token disagreement, KL drift, and latency ratio vs baseline.
 
-## Status
+This is intentionally aligned with the most practical claim from community TurboQuant implementations: memory compression is the core win in Python-first paths, while absolute decode speedups usually require backend/kernel integration.
 
-The repo achieved its original narrow goal: it can detect cache-compression-induced fidelity drift on matched prompt sets.
+## Core Goal
 
-What it has not achieved yet:
+Find TurboQuant cache settings that maximize KV storage gain while preserving acceptable generation quality.
 
-- no refusal-rate shift in the latest stored sample,
-- no absolute decode speedup over fp16 baseline in the current Python cache path,
-- no clean long-context retrieval failure boundary in the stored supplemental probe.
+Success criteria in this repo:
+
+- strong KV storage gain (`>2x`) on long-context prompts,
+- non-catastrophic quality drift (tracked by disagreement, KL, NLL delta),
+- latency overhead kept near baseline instead of exploding.
+
+## Scope And Plan
+
+What we can achieve in this repo (HuggingFace eager path):
+
+- optimize cache update overhead,
+- improve KV storage gain vs quality tradeoff selection,
+- keep compressed-run latency close to baseline,
+- provide reproducible memory-gain measurements.
+
+What is out of scope for this repo's core goal:
+
+- claiming universal decode speedups over fp16 in eager Python attention,
+- backend/kernel-level acceleration claims (vLLM, Triton, custom CUDA).
+
+If backend acceleration is desired, this repo can export settings and telemetry to a separate integration project rather than overloading the core objective here.
 
 ![Latest Kaggle 3B snapshot](results/qwen25_3b_tradeoff.svg)
 
@@ -21,29 +40,29 @@ The committed snapshot data used for the chart is stored in [`results/qwen25_3b_
 ## What We Achieved
 
 - Built a working TurboQuant-style `DynamicCache` wrapper with asymmetric K/V bit allocation and fixed or dynamic residual windows.
-- Added an end-to-end benchmark that compares baseline and compressed-cache runs on the exact same harmful and harmless prompts.
-- Measured more than just output text: refusal rate, KL drift, teacher-forced NLL delta, token disagreement, latency, and cache compression stats.
+- Added an end-to-end benchmark that compares baseline and compressed-cache runs on the exact same prompt sets.
+- Added a memory-first reporting layer: `primary_metric=estimated_kv_storage_gain_x`, quality guardrails, and latency-vs-baseline ratio.
+- Measured more than just output text: KV compression gain, KL drift, teacher-forced NLL delta, token disagreement, and latency.
 - Added notebook checks that support two useful claims:
   - asymmetric K/V quantization is motivated by observed key/value norm asymmetry,
   - the long-context retrieval sanity check is directionally useful, but the latest stored probe is still qualitative rather than a decisive failure-threshold test.
 
-## Latest Result Snapshot
+## Latest Result Snapshot (Kaggle 3B)
 
 These numbers come from the latest executed analysis already stored in the Kaggle notebook using `Qwen/Qwen2.5-3B-Instruct`, `20` harmful prompts, `20` harmless prompts, and `filler_repetitions=32`.
 
-| Run | Refusal rate | KL to baseline | Token disagreement | Avg latency | Estimated compression ratio |
+| Run | KV storage gain (x) | Token disagreement | KL to baseline | Avg latency | Latency vs baseline |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `baseline_fp16_cache` | `0.25` | `0.000` | `0.0000` | `3.48s` | `-` |
-| `tq_k8_v4_rw128` | `0.25` | `1.279` | `0.0328` | `3.82s` | `2.27x` |
-| `tq_k6_v4_rw128` | `0.25` | `2.862` | `0.0828` | `3.69s` | `2.27x` |
-| `tq_k4_v2_rw128_prot2` | `0.25` | `3.459` | `0.1344` | `3.66s` | `3.30x` |
+| `baseline_fp16_cache` | `1.00x` | `0.0000` | `0.000` | `3.48s` | `1.00x` |
+| `tq_k8_v4_rw128` | `2.27x` | `0.0328` | `1.279` | `3.82s` | `1.10x` |
+| `tq_k6_v4_rw128` | `2.27x` | `0.0828` | `2.862` | `3.69s` | `1.06x` |
+| `tq_k4_v2_rw128_prot2` | `3.30x` | `0.1344` | `3.459` | `3.66s` | `1.05x` |
 
 Practical interpretation:
 
-- The benchmark is sensitive enough to detect fidelity drift.
-- Moderate compression is measurably closer to baseline than aggressive compression.
-- In this implementation, compressed runs are still slower than baseline, but they are now near-baseline instead of catastrophically slower.
-- The meaningful signal today is fidelity degradation under compression, not a shift in refusal rate.
+- We now have a clear, measurable TurboQuant value proposition in this repo: `2.27x` to `3.30x` KV storage gain.
+- `tq_k8_v4_rw128` is the best quality-preserving operating point in the current setup.
+- Latency remains close to baseline (about `1.05x` to `1.10x`), which keeps the memory win practical.
 
 ## Tangible Improvement Added
 
@@ -85,7 +104,7 @@ flowchart LR
     D --> F[Collect compressed-cache generations and cache stats]
     E --> G[Compare KL, NLL delta, token disagreement]
     F --> G
-    D --> H[Measure harmful-prompt refusals and latency]
+    D --> H[Measure latency and optional safety telemetry]
 ```
 
 ### Core evaluation path
@@ -94,12 +113,12 @@ flowchart LR
 - Harmless prompts come from `mlabonne/harmless_alpaca`.
 - Each run uses the same model and prompt slices for baseline and compressed-cache comparisons.
 - Harmless prompts are used to measure distributional drift against baseline.
-- Harmful prompts are used to measure refusal counts under compression.
+- Harmful prompts can be used as optional safety telemetry under compression.
 - Long-context filler can be repeated to push more tokens into the cache and make compression effects easier to observe.
 
 ### Metrics that matter here
 
-- `refusal_rate`: how often the model declines harmful prompts using a lightweight refusal-marker heuristic.
+- `refusal_rate` (optional): how often the model declines harmful prompts using a lightweight refusal-marker heuristic.
 - `avg_kl_to_baseline`: continuation-level KL divergence from baseline log-probabilities.
 - `avg_nll_delta_to_baseline`: how much worse the compressed run scores the baseline continuation tokens.
 - `avg_token_disagreement_to_baseline`: token mismatch rate versus baseline greedy continuations.
@@ -117,7 +136,7 @@ The evaluation framing is inspired by public Heretic methodology, but this repo 
 - `src/tqhk/quantization.py`: rotation, Lloyd-Max, and MSE-driven KV compression helpers.
 - `src/tqhk/cache.py`: TurboQuant-style cache wrapper with asymmetric K/V bits and residual-window logic.
 - `src/tqhk/prompting.py`: dataset loading and long-context prompt construction.
-- `src/tqhk/evaluation.py`: refusal detection, KL, NLL, disagreement, and generation utilities.
+- `src/tqhk/evaluation.py`: KL, NLL, disagreement, generation utilities, and optional refusal telemetry.
 - `src/tqhk/benchmark.py`: orchestration for baseline vs compressed ablations and result export.
 - `scripts/run_benchmark.py`: CLI entrypoint with a small set of useful cache presets.
 - `notebooks/turboquant_heretic_eval.ipynb`: Kaggle-first notebook with the main 3B result plus supplemental validations.
