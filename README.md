@@ -39,9 +39,15 @@ What is out of scope for this repo's core goal:
 
 If backend acceleration is desired, this repo can export settings and telemetry to a separate integration project rather than overloading the core objective here.
 
-![Latest Kaggle 3B snapshot](results/qwen25_3b_tradeoff.svg)
+![Latest Kaggle 3B snapshot](results/qwen25_3b_tradeoff.png)
 
-The committed snapshot data used for the chart is stored in [`results/qwen25_3b_snapshot.csv`](results/qwen25_3b_snapshot.csv). It was extracted from the latest executed outputs already present in the Kaggle-first notebook.
+The chart is generated from [`results/qwen25_3b_snapshot.csv`](results/qwen25_3b_snapshot.csv) by running:
+
+```bash
+python scripts/plot_results.py
+```
+
+The CSV was extracted from the latest executed outputs already present in the Kaggle-first notebook.
 
 ## What We Achieved
 
@@ -145,6 +151,7 @@ The evaluation framing is inspired by public Heretic methodology, but this repo 
 - `src/tqhk/evaluation.py`: KL, NLL, disagreement, generation utilities, and optional refusal telemetry.
 - `src/tqhk/benchmark.py`: orchestration for baseline vs compressed ablations and result export.
 - `scripts/run_benchmark.py`: CLI entrypoint with a small set of useful cache presets.
+- `scripts/plot_results.py`: reads `results/qwen25_3b_snapshot.csv` and regenerates `results/qwen25_3b_tradeoff.png`.
 - `notebooks/turboquant_heretic_eval.ipynb`: Kaggle-first notebook with the main 3B result plus supplemental validations.
 
 ## Rerun The Benchmark
