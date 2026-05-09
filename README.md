@@ -1,11 +1,8 @@
 # TurboQuant KV Memory Bench
 
-This repo focuses on one metric where TurboQuant gives clear, repeatable gains in a HuggingFace/Kaggle workflow:
+I built this repo to measure one thing TurboQuant delivers reliably in a HuggingFace/Kaggle workflow: KV storage compression gain (`estimated_kv_storage_gain_x`). I track token disagreement, KL drift, and latency ratio vs baseline as guardrails.
 
-- primary metric: KV storage compression gain (`estimated_kv_storage_gain_x`),
-- guardrails: token disagreement, KL drift, and latency ratio vs baseline.
-
-This is intentionally aligned with the most practical claim from community TurboQuant implementations: memory compression is the core win in Python-first paths, while absolute decode speedups usually require backend/kernel integration.
+Scope is memory compression in Python-first HuggingFace workflows. Backend or kernel integration would be needed for absolute decode speedups. That's not what this repo claims.
 
 ## At A Glance
 
@@ -15,29 +12,29 @@ This is intentionally aligned with the most practical claim from community Turbo
 
 ## Core Goal
 
-Find TurboQuant cache settings that maximize KV storage gain while preserving acceptable generation quality.
+The goal is finding TurboQuant cache settings that squeeze the most KV storage gain without destroying generation quality.
 
-Success criteria in this repo:
+Success criteria here:
 
 - strong KV storage gain (`>2x`) on long-context prompts,
-- non-catastrophic quality drift (tracked by disagreement, KL, NLL delta),
-- latency overhead kept near baseline instead of exploding.
+- quality drift that stays manageable (tracked by disagreement, KL, NLL delta),
+- latency overhead that stays close to baseline.
 
 ## Scope And Plan
 
-What we can achieve in this repo (HuggingFace eager path):
+What this repo covers on the HuggingFace eager path:
 
-- optimize cache update overhead,
-- improve KV storage gain vs quality tradeoff selection,
-- keep compressed-run latency close to baseline,
-- provide reproducible memory-gain measurements.
+- optimizing cache update overhead,
+- improving KV storage gain vs quality tradeoff selection,
+- keeping compressed-run latency close to baseline,
+- providing reproducible memory-gain measurements.
 
-What is out of scope for this repo's core goal:
+What this repo does not cover:
 
-- claiming universal decode speedups over fp16 in eager Python attention,
-- backend/kernel-level acceleration claims (vLLM, Triton, custom CUDA).
+- universal decode speedups over fp16 in eager Python attention,
+- backend/kernel-level acceleration (vLLM, Triton, custom CUDA).
 
-If backend acceleration is desired, this repo can export settings and telemetry to a separate integration project rather than overloading the core objective here.
+If you want backend acceleration, fork the settings and telemetry from here into a separate integration project.
 
 ![Latest Kaggle 3B snapshot](results/qwen25_3b_tradeoff.png)
 
@@ -55,9 +52,9 @@ The CSV was extracted from the latest executed outputs already present in the Ka
 - Added an end-to-end benchmark that compares baseline and compressed-cache runs on the exact same prompt sets.
 - Added a memory-first reporting layer: `primary_metric=estimated_kv_storage_gain_x`, quality guardrails, and latency-vs-baseline ratio.
 - Measured more than just output text: KV compression gain, KL drift, teacher-forced NLL delta, token disagreement, and latency.
-- Added notebook checks that support two useful claims:
+- Added notebook checks that support two useful observations:
   - asymmetric K/V quantization is motivated by observed key/value norm asymmetry,
-  - the long-context retrieval sanity check is directionally useful, but the latest stored probe is still qualitative rather than a decisive failure-threshold test.
+  - the long-context retrieval sanity check is directionally useful, though the latest stored probe is qualitative rather than a decisive failure-threshold test.
 
 ## Latest Result Snapshot (Kaggle 3B)
 
@@ -70,24 +67,24 @@ These numbers come from the latest executed analysis already stored in the Kaggl
 | `tq_k6_v4_rw128` | `2.27x` | `0.0828` | `2.862` | `3.69s` | `1.06x` |
 | `tq_k4_v2_rw128_prot2` | `3.30x` | `0.1344` | `3.459` | `3.66s` | `1.05x` |
 
-Practical interpretation:
+What this means in practice:
 
-- We now have a clear, measurable TurboQuant value proposition in this repo: `2.27x` to `3.30x` KV storage gain.
+- `2.27x` to `3.30x` KV storage gain is a clear, measurable win.
 - `tq_k8_v4_rw128` is the best quality-preserving operating point in the current setup.
-- Latency remains close to baseline (about `1.05x` to `1.10x`), which keeps the memory win practical.
+- Latency stays close to baseline (about `1.05x` to `1.10x`), so the memory win is actually usable.
 
 ## Tangible Improvement Added
 
-The repo now includes a concrete TurboQuant cache-path optimization that materially improves practicality on the Hugging Face eager path.
+The repo now includes a concrete TurboQuant cache-path optimization that makes the Hugging Face eager path noticeably more practical.
 
 - Added approximation-materialized compressed updates so compressed tokens still perturb decode while avoiding full-history re-decompression each step.
 - Added chunked compression updates (`compression_chunk_size`, default `16`) to avoid paying compression/decompression cost for every single-token overflow.
 - Added explicit telemetry for `estimated_compression_ratio` and `pending_uncompressed_tokens` so we can track the tradeoff between update cost and compression strictness.
 
-Measured impact in this repo:
+Measured impact:
 
-- End-to-end 3B benchmark latency for compressed runs improved from about `24-25s` (older path) to about `3.66-3.82s` (current path), while KL and token disagreement remained non-zero.
-- Synthetic cache-update microbenchmark (same tensor shapes, prefill `1024`, decode `256`) showed update-time reduction from `0.340s` at chunk size `1` to `0.163s` at chunk size `32`.
+- End-to-end 3B benchmark latency for compressed runs dropped from about `24-25s` on the older path to about `3.66-3.82s` on the current path. KL and token disagreement stayed non-zero.
+- A synthetic cache-update microbenchmark (same tensor shapes, prefill `1024`, decode `256`) cut update time from `0.340s` at chunk size `1` to `0.163s` at chunk size `32`.
 
 Reproduce the microbenchmark locally:
 
@@ -100,12 +97,12 @@ PYTHONPATH=src python scripts/bench_cache_update.py \
 
 The notebook also includes two supporting checks:
 
-- K/V norm asymmetry: a stored run reports that key norms are substantially larger than value norms, which supports allocating more bits to keys than values.
-- Needle retrieval sanity check: the notebook compares baseline, moderate compression, and aggressive compression on a long-context retrieval task. In the latest stored probe, all configurations still recovered the needle, so this check currently supports robustness inspection more than a hard failure claim.
+- K/V norm asymmetry: a stored run shows key norms are substantially larger than value norms. That supports allocating more bits to keys than values.
+- Needle retrieval sanity check: the notebook compares baseline, moderate compression, and aggressive compression on a long-context retrieval task. In the latest stored probe, all configurations still recovered the needle. So this check is more about robustness inspection than a hard failure claim.
 
 ## Methodology
 
-The benchmark is designed to isolate cache compression effects rather than general model variation.
+The benchmark isolates cache compression effects rather than general model variation.
 
 ```mermaid
 flowchart LR
@@ -139,7 +136,7 @@ flowchart LR
 
 ### Why this framing
 
-The evaluation framing is inspired by public Heretic methodology, but this repo does not copy Heretic source code and does not implement Heretic optimization loops.
+The evaluation framing is inspired by public Heretic methodology.
 
 - Heretic repository: https://github.com/p-e-w/heretic
 
@@ -156,7 +153,7 @@ The evaluation framing is inspired by public Heretic methodology, but this repo 
 
 ## Rerun The Benchmark
 
-This repo is intended to be easy to rerun on Kaggle or any CUDA machine without a large setup section.
+I tried to keep this easy to rerun on Kaggle or any CUDA machine without a massive setup section.
 
 ```bash
 pip install -e .
@@ -181,6 +178,6 @@ For the full analysis path, use the notebook in `notebooks/`. It is the canonica
 - Python `>=3.10`
 - CUDA GPU
 - Kaggle T4 is the intended low-friction target
-- The notebook is expected to run on Kaggle rather than a local laptop or CPU-only environment
+- The notebook is meant for Kaggle, not a local laptop or CPU-only setup
 
-If you are running on Kaggle, the notebook already contains clone, install, and reload cells so you do not have to reconstruct the environment manually.
+If you're on Kaggle, the notebook already has clone, install, and reload cells. You won't need to reconstruct the environment manually.
